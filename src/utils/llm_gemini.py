@@ -5,78 +5,59 @@ import time
 from typing import List
 import os
 
-
 class GeminiLLM:
-  def __init__(self,
-      completion_model: str = "text-davinci-003",
-      embedding_model: str = "text-embedding-ada-002"
-    ):
-    self.completion_model = completion_model
-    self.embedding_model = embedding_model
-    self.usage_counter = None
+    def __init__(self, 
+                 completion_model: str = "gemini-pro", 
+                 embedding_model: str = "models/embedding-001"):
+        self.completion_model = completion_model
+        self.embedding_model = embedding_model
+        self.chat_history = []
 
-  async def embedding(self, text: str) -> str:
-    text = text.replace("\n", " ")
-    emb = await openai.Embedding.acreate(input=[text], model=self.embedding_model)
-    if self.usage_counter:
-        await self.usage_counter.add_embedding_usage(emb["usage"])
-    return emb["data"][0]["embedding"]
+    def initialize_gemini_api(self):
+        # Configure the API key for genai
+        api_key = os.getenv("GEMINI_API_KEY")
+        if api_key:
+            genai.configure(api_key=api_key)
+        else:
+            raise Exception("GEMINI_API_KEY is not set in environment variables")
 
-  async def complete(
-    self,
-    header: str,
-    prompt: str,
-    complete: str,
-    temperature: float = 0.5,
-    max_tokens: int = 100,
-    stop: List[str] = None,
-  ) -> str:
-    try:
-      if self.completion_model != "gpt-4" and self.completion_model.find("gpt-3.5") == -1:
-          #Call GPT-3 DaVinci model
-          response = await openai.Completion.acreate(
-              engine=self.completion_model,
-              prompt=header+prompt+complete,
-              temperature=temperature,
-              max_tokens=max_tokens,
-              top_p=1,
-              frequency_penalty=0,
-              presence_penalty=0,
-              stop=stop
-          )
-          if self.usage_counter:
-            await self.usage_counter.add_completion_usage(response.usage)
-          return response.choices[0].text.strip()
-      else:
-          #Call GPT-4/gpt-3.5 chat model
-          messages=[{"role": "system", "content": header}, {"role": "user", "content": prompt}, {"role": "assistant", "content": complete}]
-          response = await openai.ChatCompletion.acreate(
-              model=self.completion_model,
-              messages = messages,
-              temperature=temperature,
-              max_tokens=max_tokens,
-              n=1,
-              stop=stop,
-          )
-          if self.usage_counter:
-            await self.usage_counter.add_completion_usage(response.usage)
-          return response.choices[0].message.content.strip()
-    except openai.InvalidRequestError as err:
-      print("openai_call InvalidRequestError: ", err)
-      print("\n\n§§§§§§§§§§§§§§§§§§§§§§§§§§§§PROMPT§§§§§§§§§§§§§§§§§§§§§§§§§§§§")
-      print(prompt)
-      print("§§§§§§§§§§§§§§§§§§§§§§§§§§§§\n\n")
-      raise err
-    except Exception as err:
-        print("openai_call Exception: ", err)
-        print("Retry...")
-        time.sleep(2)
-        return await self.complete(header, prompt, complete, temperature, max_tokens, stop)
+    async def embedding(self, text: str) -> list:
+        # Replace newlines in text to clean up for embedding
+        text = text.replace("\n", " ")
+        # Call Gemini embedding API
+        result = genai.embed_content(
+            model=self.embedding_model,
+            content=text,
+            task_type="retrieval_document",
+            title="Embedding of single string")
+        return result["embedding"]
 
+    async def complete(self, 
+                       header: str, 
+                       prompt: str, 
+                       complete: str, 
+                       temperature: float = 0.5, 
+                       max_tokens: int = 100, 
+                       stop: List[str] = None) -> str:
+        # Append system, user, and assistant messages to chat history
+        self.chat_history.extend([
+            {"role": "system", "content": header},
+            {"role": "user", "content": prompt},
+            {"role": "assistant", "content": complete}
+        ])
+        try:
+            # Initialize chat session if not already started
+            if not hasattr(self, 'chat_session'):
+                model = genai.GenerativeModel(self.completion_model)
+                self.chat_session = model.start_chat(history=self.chat_history)
+            # Send message and get response
+            response = self.chat_session.send_message(prompt + complete)
+            return response.text.strip()
+        except Exception as err:
+            print("Gemini API call Exception:", err)
+            print("Retry...")
+            time.sleep(2)
+            return await self.complete(header, prompt, complete, temperature, max_tokens, stop)
 
 def get_llm():
-    GOOGLE_API_KEY = os.getenv("GEMINI_API_KEY", "")
-    if len(GOOGLE_API_KEY) > 0:
-        # openai.api_key = OPENAI_API_KEY
-        genai.configure(api_key=GOOGLE_API_KEY)
-    return GeminiLLM(completion_model="gpt-3.5-turbo")
+    return GeminiLLM()

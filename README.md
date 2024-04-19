@@ -38,3 +38,9 @@ export SERPAPI_API_KEY="{GET THE API KEY}"
 ```
 source .env
 ```
+
+- Activate environmnt
+
+```
+poetry shell
+```
